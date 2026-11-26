@@ -310,6 +310,7 @@
     const backtestSubmit = $("backtestSubmit");
     const apiStatus = $("apiStatus");
     const backtestResults = $("backtestResults");
+    let loadBacktestIntoSimulation = null;
 
     const setApiStatus = (message, state) => {
       apiStatus.textContent = message;
@@ -360,8 +361,12 @@
         $("apiBenchmarkInformation").textContent = formatApiRatio(benchmark.information_ratio);
         const lastBar = payload.equity_curve[payload.equity_curve.length - 1];
         $("backtestSummary").textContent = `${payload.ticker} · ${payload.bars.toLocaleString()} daily bars · last bar ${lastBar?.date ?? "unavailable"}`;
+        if (typeof loadBacktestIntoSimulation !== "function") {
+          throw new Error("The simulator could not load the live backtest results.");
+        }
+        loadBacktestIntoSimulation(payload);
         backtestResults.hidden = false;
-        setApiStatus("Backtest complete.", "complete");
+        setApiStatus("Backtest complete and loaded into the simulator above.", "complete");
       } catch (error) {
         setApiStatus(error instanceof Error ? error.message : "The backtest request failed.", "error");
       } finally {
@@ -380,6 +385,66 @@
     let hoverIndex = -1;
     let chartBounds = null;
     let initialCapital = 10000;
+    let liveBacktestLoaded = false;
+    let simulationSourceLabel = "adjusted daily candles";
+
+    loadBacktestIntoSimulation = (payload) => {
+      const curve = payload.equity_curve;
+      const capital = Number($("capital").value);
+      if (!Array.isArray(curve) || curve.length === 0 || !Number.isFinite(capital) || capital <= 0) {
+        throw new Error("The backtest returned no usable equity history or the starting capital is invalid.");
+      }
+
+      const requiredFields = ["date", "equity", "buy_hold_equity", "position", "strategy_return"];
+      if (curve.some((bar) => requiredFields.some((field) => !Number.isFinite(field === "date" ? 1 : Number(bar[field])) || (field === "date" && typeof bar.date !== "string")))) {
+        throw new Error("The backtest returned incomplete daily portfolio data.");
+      }
+
+      stopPlayback();
+      initialCapital = capital;
+      $("fee").value = $("backtestFee").value;
+      $("dataSummary").textContent = `${payload.ticker} · live Yahoo Finance data · ${payload.bars.toLocaleString()} daily bars`;
+      $("dataSummary").title = `Live backtest: ${payload.ticker}, ${payload.period}`;
+      simulationSourceLabel = `live ${payload.ticker} daily bars`;
+      $("start").disabled = false;
+      $("pause").disabled = true;
+      $("pause").textContent = "Ⅱ Pause";
+      let strategyPeak = 0;
+      let benchmarkPeak = 0;
+      let previousPosition = 0;
+      results = curve.map((bar) => {
+        const position = Number(bar.position);
+        const strategy = capital * Number(bar.equity);
+        const benchmark = capital * Number(bar.buy_hold_equity);
+        strategyPeak = Math.max(strategyPeak, strategy);
+        benchmarkPeak = Math.max(benchmarkPeak, benchmark);
+        const row = {
+          date: bar.date.slice(0, 10),
+          strategy,
+          benchmark,
+          position,
+          longEntry: position === 1 && previousPosition !== 1,
+          shortEntry: position === -1 && previousPosition !== -1,
+          shortExit: previousPosition === -1 && position !== -1,
+          strategyReturn: Number(bar.strategy_return),
+          benchmarkReturn: 0,
+          strategyMaxDrawdown: strategy / strategyPeak - 1,
+          benchmarkMaxDrawdown: benchmark / benchmarkPeak - 1,
+        };
+        previousPosition = position;
+        return row;
+      });
+      for (let index = 0; index < results.length; index += 1) {
+        results[index].benchmarkReturn = index === 0
+          ? Number(curve[index].buy_hold_equity) - 1
+          : Number(curve[index].buy_hold_equity) / Number(curve[index - 1].buy_hold_equity) - 1;
+      }
+      liveBacktestLoaded = true;
+      visibleCount = 0;
+      hoverIndex = -1;
+      setStatus(`Live ${payload.ticker} backtest loaded · press Start simulation to play ${results.length.toLocaleString()} days`, "ready");
+      render();
+    };
 
     const money = (value) => new Intl.NumberFormat("en-US", {
       style: "currency", currency: "USD", maximumFractionDigits: 0
@@ -703,6 +768,8 @@
         return;
       }
       initialCapital = capital;
+      liveBacktestLoaded = false;
+      simulationSourceLabel = "adjusted daily candles";
       try {
         results = buildResults(feeBps);
       } catch (error) {
@@ -721,9 +788,17 @@
 
     function startSimulation() {
       stopPlayback();
-      if (!prepareSimulation()) return;
+      if (liveBacktestLoaded) {
+        visibleCount = 0;
+        hoverIndex = -1;
+        $("start").disabled = true;
+        $("pause").disabled = false;
+        render();
+      } else if (!prepareSimulation()) {
+        return;
+      }
       $("pause").textContent = "Ⅱ Pause";
-      setStatus(`Simulating ${marketData.length.toLocaleString()} adjusted daily candles…`, "running");
+      setStatus(`Simulating ${results.length.toLocaleString()} ${simulationSourceLabel}…`, "running");
       lastTick = 0;
       if ($("speed").value === "all") {
         visibleCount = results.length;
@@ -754,7 +829,12 @@
       }
       if (!results.length || visibleCount >= results.length) {
         stopPlayback();
-        if (!prepareSimulation()) return;
+        if (liveBacktestLoaded) {
+          visibleCount = 0;
+          hoverIndex = -1;
+        } else if (!prepareSimulation()) {
+          return;
+        }
       }
       visibleCount += 1;
       render();
@@ -775,6 +855,8 @@
       $("pause").disabled = true;
       $("pause").textContent = "Ⅱ Pause";
       initialCapital = Number($("capital").value) || 10000;
+      liveBacktestLoaded = false;
+      simulationSourceLabel = "adjusted daily candles";
       setStatus("Ready — press Start simulation", "ready");
       render();
     }
