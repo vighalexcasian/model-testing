@@ -1,4 +1,4 @@
-"""Download daily history and backtest a 200-day EMA long/short strategy."""
+"""Download daily history and backtest a weekly MACD long/short strategy."""
 
 import argparse
 import re
@@ -79,7 +79,7 @@ def _summarize(returns, equity, active_returns=None):
 
 
 def run_backtest(history, fee_bps=5, interval="1d"):
-    """Trade daily price crossings of the EMA200 at the next open."""
+    """Follow completed weekly MACD histogram signals from the next daily open."""
     if interval != "1d":
         raise ValueError("The strategy requires daily (1d) candles")
     if fee_bps < 0 or fee_bps > 10000:
@@ -88,21 +88,32 @@ def run_backtest(history, fee_bps=5, interval="1d"):
         raise ValueError("History must contain Open, High, Low, and Close columns")
 
     frame = history[list(OHLC_COLUMNS)].dropna().sort_index().copy()
-    if len(frame) < 201:
-        raise ValueError("At least 201 daily candles are required for the EMA200")
-
-    close = frame["Close"]
-    ema200 = close.ewm(span=200, adjust=False, min_periods=200).mean()
-
-    price_cross_above = (close > ema200) & (
-        close.shift(1) <= ema200.shift(1)
+    weekly_periods = frame["Close"].resample("W-FRI")
+    weekly_close = weekly_periods.last().dropna()
+    weekly_last_dates = weekly_periods.apply(lambda values: values.index[-1]).reindex(
+        weekly_close.index
     )
-    price_cross_below = (close < ema200) & (
-        close.shift(1) >= ema200.shift(1)
-    )
-    long_signal = price_cross_above.fillna(False)
-    short_signal = price_cross_below.fillna(False)
+    if frame.index[-1].weekday() != 4:
+        weekly_close = weekly_close.iloc[:-1]
+        weekly_last_dates = weekly_last_dates.iloc[:-1]
+    if len(weekly_close) < 34:
+        raise ValueError("At least 34 completed weekly candles are required for MACD(12, 26, 9)")
 
+    macd_line = weekly_close.ewm(span=12, adjust=False, min_periods=12).mean() - weekly_close.ewm(
+        span=26, adjust=False, min_periods=26
+    ).mean()
+    macd_signal_line = macd_line.ewm(span=9, adjust=False, min_periods=9).mean()
+    weekly_histogram = macd_line - macd_signal_line
+    actual_weekly_dates = pd.DatetimeIndex(
+        weekly_last_dates.loc[weekly_histogram.index].tolist(), name=frame.index.name
+    )
+    weekly_histogram.index = actual_weekly_dates
+    macd_line.index = actual_weekly_dates
+    macd_signal_line.index = actual_weekly_dates
+    daily_histogram = weekly_histogram.reindex(frame.index, method="ffill")
+
+    long_signal = daily_histogram.gt(0).fillna(False)
+    short_signal = daily_histogram.lt(0).fillna(False)
     close_signal_position = pd.Series(0.0, index=frame.index)
     position = 0.0
     for date in frame.index:
@@ -114,7 +125,9 @@ def run_backtest(history, fee_bps=5, interval="1d"):
 
     next_open_return = frame["Open"].shift(-1).div(frame["Open"]).sub(1.0)
     result = frame.copy()
-    result["EMA200"] = ema200
+    result["Weekly_MACD"] = macd_line.reindex(frame.index, method="ffill")
+    result["Weekly_MACD_Signal"] = macd_signal_line.reindex(frame.index, method="ffill")
+    result["MACD_Histogram"] = daily_histogram
     result["Long_Signal"] = long_signal
     result["Short_Signal"] = short_signal
     result["Position"] = close_signal_position.shift(1).fillna(0.0)
@@ -152,7 +165,7 @@ def run_backtest(history, fee_bps=5, interval="1d"):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Backtest the daily EMA200 long/short strategy."
+        description="Backtest the weekly MACD histogram long/short strategy."
     )
     parser.add_argument("--ticker", default="SPY", help="Yahoo Finance symbol")
     parser.add_argument("--period", default="max", help="Yahoo Finance history period")
@@ -181,7 +194,7 @@ def main():
     )
 
     print(
-        "{0} 1d | {1} bars | EMA 200 long/short | fee {2:g} bps".format(
+        "{0} 1d | {1} bars | weekly MACD(12, 26, 9) histogram long/short | fee {2:g} bps".format(
             args.ticker, len(history), args.fee_bps
         )
     )

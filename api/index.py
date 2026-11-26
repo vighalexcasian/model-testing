@@ -15,7 +15,7 @@ from backtest import download_history, run_backtest
 
 app = FastAPI(
     title="Backtesting API",
-    description="Historical EMA200 long/short backtesting service",
+    description="Historical weekly MACD long/short backtesting service",
     version="1.0.0"
 )
 
@@ -83,7 +83,9 @@ def backtest(request: BacktestRequest):
             curve.append({
                 "date": date.isoformat(),
                 "close": clean_number(row["Close"]),
-                "ema200": clean_number(row["EMA200"]),
+                "weekly_macd": clean_number(row["Weekly_MACD"]),
+                "weekly_macd_signal": clean_number(row["Weekly_MACD_Signal"]),
+                "macd_histogram": clean_number(row["MACD_Histogram"]),
                 "position": clean_number(row["Position"]),
                 "strategy_return": clean_number(
                     row["Strategy_Return"]
