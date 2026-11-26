@@ -37,9 +37,29 @@ additional slippage, or dividends not reflected in adjusted prices.
 Yahoo Finance availability and historical depth vary by symbol. The downloaded
 CSV is the local record of the data used in each run.
 
-## Interactive simulator
+## Interactive simulator and API
 
-Open `interactive_simulator\index.html` in a browser and press **Start
-simulation** to animate the strategy against buy and hold. It includes
-bundled SPY daily history and needs no install or local server. See
-`interactive_simulator\README.md` for controls.
+The HTML frontend is served from `/` on Vercel. Its original bundled-SPY
+simulator remains available, and the **Run live backtest** form submits a
+same-origin request to `POST /api/backtest`. The legacy `POST /backtest` and
+`GET /health` routes are retained; `GET /api` and `GET /api/health` expose API
+status checks.
+
+The request body accepts `ticker` (default `SPY`), `period` (default `5y`;
+`1y`, `2y`, `5y`, `10y`, `max`, `1mo`, `3mo`, `6mo`, or `ytd`), and `fee_bps`
+(default `5`). At least 34 completed weekly candles are needed by the MACD
+strategy, so short date ranges may be rejected. The response contains strategy
+and buy-and-hold metrics plus the daily equity curve. The same weekly MACD
+calculations and annualized metrics are used by the existing backtesting engine.
+
+Vercel deploys the FastAPI app as a Python Function. Its maximum request
+execution duration is configured in `vercel.json`; the available ceiling is
+plan-dependent. Backtests require outbound access to Yahoo Finance, whose
+availability and rate limits are outside this project. The endpoint is public
+and unauthenticated, with no per-user quota or rate limit; anyone who can reach
+the deployed URL can request a backtest. Add edge rate limiting or a quota
+before exposing it to significant public traffic. For Vercel deployment,
+connect this repository to a Vercel project
+with the repository root as the project root, then deploy the project.
+
+For local simulator controls, see `interactive_simulator\README.md`.

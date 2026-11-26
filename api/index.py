@@ -1,6 +1,7 @@
 
 import sys
 import math
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -13,10 +14,18 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from backtest import download_history, run_backtest
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
     title="Backtesting API",
     description="Historical weekly MACD long/short backtesting service",
     version="1.0.0"
+)
+
+app.frontend(
+    "/",
+    directory=str(ROOT / "interactive_simulator"),
+    fallback="index.html",
 )
 
 
@@ -31,7 +40,7 @@ def clean_number(value):
     return value if math.isfinite(value) else None
 
 
-@app.get("/")
+@app.get("/api")
 def home():
     return {
         "status": "online",
@@ -40,11 +49,13 @@ def home():
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health():
     return {"status": "healthy"}
 
 
-@app.post("/backtest")
+@app.post("/backtest", include_in_schema=False)
+@app.post("/api/backtest")
 def backtest(request: BacktestRequest):
     try:
         ticker = request.ticker.strip().upper()
@@ -107,8 +118,9 @@ def backtest(request: BacktestRequest):
     except HTTPException:
         raise
 
-    except Exception as error:
+    except Exception:
+        logger.exception("Backtest request failed")
         raise HTTPException(
             status_code=500,
-            detail=str(error)
+            detail="Backtest failed. Verify the ticker and data source availability, then retry.",
         )
